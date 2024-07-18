@@ -1,4 +1,40 @@
 (lang dune 3.16)
 (name myapp)
-(sections (lib .) (bin ../../bin))
-(files (lib (META dune-package opam)) (bin (myapp)))
+(sections (lib .) (libexec .) (bin ../../bin))
+(files
+ (lib
+  (META
+   app_features/app_features.a
+   app_features/app_features.cma
+   app_features/app_features.cmi
+   app_features/app_features.cmt
+   app_features/app_features.cmti
+   app_features/app_features.cmx
+   app_features/app_features.cmxa
+   app_features/app_features.ml
+   app_features/app_features.mli
+   dune-package
+   opam))
+ (libexec (app_features/app_features.cmxs))
+ (bin (myapp)))
+(library
+ (name myapp.app_features)
+ (kind normal)
+ (archives
+  (byte app_features/app_features.cma)
+  (native app_features/app_features.cmxa))
+ (plugins
+  (byte app_features/app_features.cma)
+  (native app_features/app_features.cmxs))
+ (native_archives app_features/app_features.a)
+ (requires graphics)
+ (main_module_name App_features)
+ (modes byte native)
+ (modules
+  (singleton
+   (obj_name app_features)
+   (visibility public)
+   (source
+    (path App_features)
+    (intf (path app_features/app_features.mli))
+    (impl (path app_features/app_features.ml))))))

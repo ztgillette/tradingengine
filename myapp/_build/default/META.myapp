@@ -1,0 +1,9 @@
+package "app_features" (
+  directory = "app_features"
+  description = ""
+  requires = "graphics"
+  archive(byte) = "app_features.cma"
+  archive(native) = "app_features.cmxa"
+  plugin(byte) = "app_features.cma"
+  plugin(native) = "app_features.cmxs"
+)

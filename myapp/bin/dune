@@ -1,4 +1,4 @@
 (executable
  (public_name myapp)
  (name main)
- (libraries myapp graphics))
+ (libraries app_features unix graphics csv core))
