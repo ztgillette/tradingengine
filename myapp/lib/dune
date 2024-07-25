@@ -1,4 +1,4 @@
 (library
  (name app_features)
  (public_name myapp.app_features)
- (libraries unix graphics csv core))
+ (libraries unix graphics csv core core_unix))

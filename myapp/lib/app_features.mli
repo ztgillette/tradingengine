@@ -14,4 +14,23 @@ class clock : object
     method set_current_time : float -> unit
     method set_previous_time : float -> unit
 end
+
+type row = {
+  timestamp : string;
+  emini : float;
+  nasdaq : float;
+  russell : float;
+  spy : float;
+  qqq : float;
+  apple : float;
+  microsoft : float;
+  nvidia : float;
+}
   
+class data : string -> object
+    method init_data : unit
+    method get_row : string -> row option
+    method get_current_timestamp : string
+    method set_current_timestamp : string -> unit
+    method get_next_timestamp : unit
+end
