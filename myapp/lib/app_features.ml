@@ -34,7 +34,7 @@ class text_box x y width height text = object
     set_color (rgb br bg bb);
     fill_rect x1 y1 width height;
 
-    (*button text*)
+    (*text*)
     set_color (rgb tr tg tb);
     let font = Printf.sprintf "-*-fixed-medium-r-semicondensed--%d-*-*-*-*-*-iso8859-1" 20 in
     set_font font;
@@ -63,6 +63,8 @@ class button x y width height r g b text = object (self)
   val y2 = y + height
   val width = width
   val height = height
+  val mutable text_color = black
+  val mutable justification = "center";
 
   (*colors*)
   val r = r
@@ -72,6 +74,9 @@ class button x y width height r g b text = object (self)
   val text = text
   val mutable currently_pressed = false
   val mutable active = true
+
+  method set_light_text_color =
+    text_color <- white
 
   method draw =
     (*button background*)
@@ -87,11 +92,17 @@ class button x y width height r g b text = object (self)
     fill_rect x1 y1 width height;
 
     (*button text*)
-    set_color black;
+    set_color text_color;
     let font = Printf.sprintf "-*-fixed-medium-r-semicondensed--%d-*-*-*-*-*-iso8859-1" 20 in
     set_font font;
     let size_x, size_y = text_size text in
-    moveto (((width - size_x) / 2) + x1) (((height - size_y) / 2) + y1);
+    (* moveto (((width - size_x) / 2) + x1) (((height - size_y) / 2) + y1); *)
+    if String.equal "center" justification then
+      moveto (((width - size_x) / 2) + x1) (((height - size_y) / 2) + y1)
+    else if String.equal "left" justification then
+      moveto x1 (((height - size_y) / 2) + y1)
+    else if String.equal "right" justification then
+      moveto (x2-size_x) (((height - size_y) / 2) + y1);
     draw_string text;
     
 
@@ -190,6 +201,22 @@ class clock = object
 
     mult;
 
+    method get_cpu_helper = 
+
+      let cpu_helper = match seconds_per_second with
+      | 1.0 -> 1
+      | 3.0 -> 1
+      | 30.0 -> 1
+      | 60.0 -> 3
+      | 300.0 -> 15
+      | 900.0 -> 45
+      | 1800.0 -> 90
+      | 3600.0 -> 180
+      | 10800.0 -> 540
+      | 86400.0 -> 4320
+      | _ -> 1 in
+      cpu_helper;
+
 end
 
 (*button sub classes*)
@@ -244,10 +271,6 @@ class time_change_button x y width height r g b text clock_obj inc = object (sel
       
     );
 end
-
-
-
-
 
 
 
@@ -353,7 +376,9 @@ class data path filename = object (self)
   method set_current_timestamp timestamp = 
     current_timestamp <- timestamp
 
-  method get_next_timestamp step = 
+  method get_next_timestamp s cpu_helper = 
+
+    let step = s * cpu_helper in
 
     (*check and see if we're on last timestamp*)
     if (String.equal current_timestamp last_timestamp) || (String.compare current_timestamp last_timestamp > 0) then (
@@ -449,7 +474,7 @@ class data path filename = object (self)
       if Hashtbl.mem data (self#get_current_timestamp) then
         found_next_price := true
       else
-        self#get_next_timestamp 1
+        self#get_next_timestamp 1 cpu_helper
     done;
 
   method get_current_price stock_name =
@@ -500,7 +525,7 @@ class data path filename = object (self)
 
     !price
 
-  method get_pretty_timestamp (fps : float) (num_frames : float) (mult : float) = 
+  method get_pretty_timestamp (fps : float) (num_frames : float) (mult : float) (cpu_helper : int)= 
     let second = ref (String.sub current_timestamp ~pos:17 ~len:2) in
     let minute = ref (String.sub current_timestamp ~pos:14 ~len:2) in
     let hour = ref (String.sub current_timestamp ~pos:11 ~len:2) in
@@ -536,15 +561,19 @@ class data path filename = object (self)
         hour_adjusted := "12";
 
     (*micro adjust seconds for inbetween 3 seconds*)
-    let int_second = ref (int_of_string !second) in
-    if (int_of_float num_frames) >= (int_of_float (fps /. mult)) then
-      int_second := !int_second + 1;
-    if (int_of_float num_frames) >= ((int_of_float (fps /. mult)) * 2) then
-      int_second := !int_second + 1;
+    if cpu_helper = 1 then (
 
-    second := string_of_int !int_second;
-    if !int_second < 10 then
-      second := "0" ^ !second;
+      let int_second = ref (int_of_string !second) in
+      if (int_of_float num_frames) >= (int_of_float (fps /. mult)) then
+        int_second := !int_second + 1;
+      if (int_of_float num_frames) >= ((int_of_float (fps /. mult)) * 2) then
+        int_second := !int_second + 1;
+
+      second := string_of_int !int_second;
+      if !int_second < 10 then
+        second := "0" ^ !second;
+
+    );
 
     (self#get_day_of_week current_timestamp) ^ ", " ^ month_in_text ^ " " ^ !day ^ ", " ^ !year ^ " " ^ !hour_adjusted ^ ":" ^ !minute ^ ":" ^ !second ^ " " ^ !ampm
 
@@ -631,13 +660,10 @@ class data path filename = object (self)
     else
       "";
       
-      
-
 end
 
 
-
-class stock_graph mydata = object
+class stock_graph mydata = object (self)
 
   (*visualization*)
   val x1 = 50;
@@ -646,18 +672,141 @@ class stock_graph mydata = object
   val height = 600;
 
   (*stock info*)
-  val mutable current_stock = "";
+  val mutable current_stock = "emini";
   val mutable current_value = 0.0;
 
   (*step size in seconds (min 3 seconds)*)
   val mutable step_size = 3;
   val mutable mydata = mydata;
 
+  (*view timeline (in minutes)*)
+  val mutable timeline = 5;
+  val mutable stretch_factor = 1.0;
+
+  (*stock data*)
+  val mutable timestamp_list = []
+  val emini_data : (string, float) Hashtbl.t = Hashtbl.create (module String)
+  val nasdaq_data : (string, float) Hashtbl.t = Hashtbl.create (module String)
+  val russell_data : (string, float) Hashtbl.t = Hashtbl.create (module String)
+  val spy_data : (string, float) Hashtbl.t = Hashtbl.create (module String)
+  val qqq_data : (string, float) Hashtbl.t = Hashtbl.create (module String)
+  val apple_data : (string, float) Hashtbl.t = Hashtbl.create (module String)
+  val microsoft_data : (string, float) Hashtbl.t = Hashtbl.create (module String)
+  val nvidia_data : (string, float) Hashtbl.t = Hashtbl.create (module String)
+
+  method get_data stock_name timestamp = 
+
+    let price = match stock_name with
+    | "emini" -> Hashtbl.find emini_data timestamp
+    | "nasdaq" -> Hashtbl.find nasdaq_data timestamp
+    | "russell" -> Hashtbl.find russell_data timestamp
+    | "spy" -> Hashtbl.find spy_data timestamp
+    | "qqq"-> Hashtbl.find qqq_data timestamp
+    | "apple" -> Hashtbl.find apple_data timestamp
+    | "microsoft" -> Hashtbl.find microsoft_data timestamp
+    | "nvidia" -> Hashtbl.find nvidia_data timestamp
+    | _ -> Hashtbl.find emini_data timestamp in
+    price
+    
+
+  method get_min_max stock_name min_max = 
+    let price = match stock_name with
+    | "emini" -> Hashtbl.find emini_data min_max
+    | "nasdaq" -> Hashtbl.find nasdaq_data min_max
+    | "russell" -> Hashtbl.find russell_data min_max
+    | "spy" -> Hashtbl.find spy_data min_max
+    | "qqq"-> Hashtbl.find qqq_data min_max
+    | "apple" -> Hashtbl.find apple_data min_max
+    | "microsoft" -> Hashtbl.find microsoft_data min_max
+    | "nvidia" -> Hashtbl.find nvidia_data min_max
+    | _ -> Hashtbl.find emini_data min_max in
+    price
+    
+    (* let price = match price_option with
+    | Some x -> (
+      print_endline "bettttttt";
+      x
+    )
+    | None -> (
+      print_endline "nahhhhh";
+      0.0)
+    in price *)
+
+  method init_min_max stock_name price min_max = 
+    match stock_name with
+    | "emini" -> ((Hashtbl.remove emini_data min_max);
+      ignore (Hashtbl.add emini_data ~key:min_max ~data:price))
+    | "nasdaq" -> ((Hashtbl.remove nasdaq_data min_max);
+    ignore (Hashtbl.add nasdaq_data ~key:min_max ~data:price))
+    | "russell" -> ((Hashtbl.remove russell_data min_max);
+    ignore (Hashtbl.add russell_data ~key:min_max ~data:price))
+    | "spy" -> ((Hashtbl.remove spy_data min_max);
+    ignore (Hashtbl.add spy_data ~key:min_max ~data:price))
+    | "qqq"-> ignore ((Hashtbl.remove qqq_data min_max);
+    ignore (Hashtbl.add qqq_data ~key:min_max ~data:price))
+    | "apple" -> ignore ((Hashtbl.remove apple_data min_max);
+    ignore (Hashtbl.add apple_data ~key:min_max ~data:price))
+    | "microsoft" -> ((Hashtbl.remove microsoft_data min_max);
+    ignore (Hashtbl.add microsoft_data ~key:min_max ~data:price))
+    | "nvidia" -> ((Hashtbl.remove nvidia_data min_max);
+    ignore (Hashtbl.add nvidia_data ~key:min_max ~data:price))
+    | _ -> ignore ((Hashtbl.remove emini_data min_max);
+    ignore (Hashtbl.add emini_data ~key:min_max ~data:price))
+
+  method add_timestamp t =
+    (*add to list of timestamps*)
+    timestamp_list <- timestamp_list @ [t];
+
+
+  method add_data stock_name timestamp (price:float) = 
+
+    let current_min_option = self#get_min_max stock_name "min" in
+    let current_min = match current_min_option with
+    | Some x -> x
+    | _ -> -1.0 in
+
+    let current_max_option = self#get_min_max stock_name "max" in
+    let current_max = match current_max_option with
+    | Some x -> x
+    | _ -> -1.0 in
+
+    if ((Float.compare current_min 0.0) < 0 || (Float.compare price current_min) < 0) then (
+      self#init_min_max stock_name price "min";
+      (* print_endline "min"; *)
+    );
+
+    if ((Float.compare current_max 0.0) < 0 || (Float.compare price current_max) > 0) then (
+      self#init_min_max stock_name price "max";
+      (* print_endline "max"; *)
+    );
+
+    (*update current values and stock*)
+
+    
+    (*add data*)
+    if (String.equal stock_name "emini") then
+      ignore (Hashtbl.add emini_data ~key:timestamp ~data:price)
+    else if (String.equal stock_name "nasdaq") then
+      ignore (Hashtbl.add nasdaq_data ~key:timestamp ~data:price)
+    else if (String.equal stock_name "russell") then
+      ignore (Hashtbl.add russell_data ~key:timestamp ~data:price)
+    else if (String.equal stock_name "spy") then
+      ignore (Hashtbl.add spy_data ~key:timestamp ~data:price)
+    else if (String.equal stock_name "qqq") then
+      ignore (Hashtbl.add qqq_data ~key:timestamp ~data:price)
+    else if (String.equal stock_name "apple") then
+      ignore (Hashtbl.add apple_data ~key:timestamp ~data:price)
+    else if (String.equal stock_name "microsoft") then
+      ignore (Hashtbl.add microsoft_data ~key:timestamp ~data:price)
+    else if (String.equal stock_name "nvidia") then
+      ignore (Hashtbl.add nvidia_data ~key:timestamp ~data:price)
+
   method set_current_stock s =
     current_stock <- s;
 
-  method set_current_value v = 
-    current_value <- v;
+  method set_current_value v stock_name = 
+    if String.equal stock_name current_stock then
+      current_value <- v;
 
   method get_current_stock =
     current_stock;
@@ -665,16 +814,362 @@ class stock_graph mydata = object
   method get_current_value = 
     current_value;
 
+  method get_timeline = 
+    timeline;
+
+  method set_timeline t = 
+    timeline <- t;
+
+  method get_pretty_timeframe = 
+
+    let tf = match timeline with
+    | 5 -> "5 mins" (*5 mins*)
+    | 15 -> "15 mins" (*15 mins*)
+    | 60 -> "1 hour" (*1 hour*)
+    | 180 -> "3 hours" (*3 hours*)
+    | 1440 -> "1 day" (*1 day*)
+    | 10080 -> "1 week" (*1 week*)
+    | 43200 -> "1 month" (*1 month*)
+    | 525600 -> "1 year" (*1 year*)
+    | 2628000 -> "all time" (*5 years (all time)*)
+    | _ -> "" in
+    tf
+
+  method get_x i max_i = 
+
+    
+    let timeline_in_seconds = 60.0 *. float_of_int timeline in
+    let dx = float_of_int step_size /. timeline_in_seconds in
+    let dx_pixels = ref (dx *. float_of_int width) in
+    (* print_endline (string_of_int ((i * dx_pixels) + x1)); *)
+
+    (*case 1: not enough data to fill screen, so we draw from left*)
+    if Float.compare ((float_of_int max_i) *. !dx_pixels) (float_of_int (width - x1)) < 0 then
+      (
+        ((float_of_int i) *. !dx_pixels) +. (float_of_int x1);
+      
+      )
+    (*case 2: too much data, so we draw most recent data from the right*)
+    else if Float.compare ((float_of_int (width + x1)) -. (((float_of_int (max_i - i)) *. !dx_pixels) +. (float_of_int x1))) 75.0 > 0 then (
+      (float_of_int (width + x1)) -. (((float_of_int (max_i - i)) *. !dx_pixels) +. (float_of_int x1))
+    )
+    else 
+      1234567.8
+
+  method get_y stock_name price = 
   
+    let low_point = self#get_low_high_point stock_name false in
+    let high_point = self#get_low_high_point stock_name true in
+
+    let price_span = high_point -. low_point in
+
+    let rel_height = price -. low_point in
+    let ratio = price_span /. (float_of_int height) in
+
+    let pixel_ratio = rel_height /. ratio in
+    ((int_of_float pixel_ratio) + y1)
+
+  method get_low_high_point stock_name high = 
+    
+    let price_min_option = self#get_data stock_name "min" in
+    let min_price = match price_min_option with
+      | Some x -> x
+      | None -> 0.0
+    in
+  
+    let price_max_option = self#get_data stock_name "max" in
+    let max_price = match price_max_option with
+      | Some x -> x
+      | None -> 0.0
+    in
+  
+    let middle_price : float = ((max_price -. min_price) /. 2.0) +. min_price in
+  
+    (* print_endline ("max: " ^ string_of_float (max_price /. middle_price));
+    print_endline ("min: " ^ string_of_float (min_price /. middle_price)); *)
+
+
+
+    let high_point = if Float.compare (max_price /. middle_price) 1.02 < 0 then
+      middle_price *. 1.02
+    else (
+      max_price
+    ) in
+  
+    let low_point = if Float.compare (min_price /. middle_price) 0.98 > 0 then
+      middle_price *. 0.98
+    else (
+      min_price
+    ) in
+
+    if high then
+      high_point
+    else
+      low_point;
+
+  method draw_segment stock_name i max_i new_key old_key =
+
+    
+    let price_new_option = self#get_data stock_name new_key in
+    let price_new = match price_new_option with
+      | Some x -> x
+      | None -> 0.0
+    in
+
+    let price_old_option = self#get_data stock_name old_key in
+    let price_old = match price_old_option with
+      | Some x -> x
+      | None -> 0.0
+    in
+
+    let x_new = int_of_float (Float.round_down (self#get_x i max_i)) in
+    let y_new = self#get_y stock_name price_new in
+
+    let adj_i = if (i-1) < 0 then 0 else (i-1) in
+    let x_old = int_of_float (Float.round_down (self#get_x adj_i max_i)) in
+    let y_old = self#get_y stock_name price_old in
+
+    (*check if actually supposed to be drawn (no 1234567)*)
+    if x_old < 123456 && x_new < 123456 then (
+      moveto x_old y_old;
+      lineto x_new y_new;
+    );
+
+  
+  method get_bound high =
+    let max_i = (List.length timestamp_list - 1) in
+
+    let timeline_in_seconds = 60.0 *. float_of_int timeline in
+    let num_steps = int_of_float (timeline_in_seconds /. float_of_int step_size) in
+
+    (*not full data*)
+    let low_bound = ref 0 in
+    let high_bound = ref max_i in
+
+    (*full data*)
+    if (List.length timestamp_list) > num_steps then (
+      low_bound := List.length timestamp_list - 1 - num_steps;
+      high_bound := List.length timestamp_list - 1
+    );
+
+    if high then
+    (!high_bound)
+    else
+    (!low_bound);
+
+  (*heavy-weight draw function called in draw*)
+  method draw_data = 
+
+    (*two cases: if not enough data for timeline, then draw growing from left 
+      if enough data for timeline, then draw over entire screen shifting left*)
+    
+    (*case 1*)
+    (*find out how far dx will be*)
+
+    (*set color*)
+    self#set_segment_color;
+
+    let max_i = (List.length timestamp_list - 1) in
+    let low_bound = self#get_bound false in
+    let high_bound = self#get_bound true in
+    for i = low_bound to high_bound do
+      let k_option_1 = List.nth timestamp_list i in
+      let k_1 = match k_option_1 with
+        | Some x -> x
+        | None -> "" in
+
+      let k_option_2 = List.nth timestamp_list (i-1) in
+      let k_2 = match k_option_2 with
+        | Some x -> x
+        | None -> "" in  
+  
+      if i > 0 then
+      self#draw_segment current_stock i max_i k_1 k_2;
+    done;
+
+  method set_sigfigs text n =
+
+    let text_len = String.length text in
+
+    let contains = ref false in
+    for i=0 to (text_len-1) do
+
+      if String.equal "." (String.sub text ~pos:i ~len:1) then
+        contains := true
+
+    done;
+
+    (*if decminal exists, locate it*)
+    if !contains then (
+      
+      let dec_ind = match String.index text '.' with
+      | Some x -> x
+      | _ -> 0 in (*this line should never happen*)
+
+      let base_num = String.sub text ~pos:0 ~len:dec_ind in
+      let current_decimal_length = (text_len-(dec_ind+1)) in
+      let decimal_num = String.sub text ~pos:(dec_ind+1) ~len:current_decimal_length in
+
+      if current_decimal_length <= n then
+        base_num ^ "." ^ decimal_num
+      else
+        let new_decimal_num = String.sub decimal_num ~pos:0 ~len:n in
+        base_num ^ "." ^ new_decimal_num
+    ) else 
+      text;
+
+  method draw_lines = 
+
+    (*horizontal price lines + prices*)
+    let num_lines = 9 in
+
+    let low_price = self#get_low_high_point current_stock false in
+    let high_price = self#get_low_high_point current_stock true in
+    let price_step = (high_price -. low_price) /. (float_of_int (num_lines+1)) in
+    
+    for i = 1 to num_lines do
+
+      (*draw line*)
+      let y = (y1 + (i*height/(num_lines+1))) in
+      set_color (rgb 60 60 60);
+      moveto x1 y;
+      lineto (x1 + width) y;
+
+      (*draw text*)
+      (*text*)
+      set_color (rgb 150 150 150);
+      let price = (low_price +. ((float_of_int i) *. price_step)) in
+      print_endline (string_of_float current_value);
+      let percentage = (price -. current_value) /. price *. 100.0 in
+      let percentage_str = (self#set_sigfigs (string_of_float percentage) 2) in
+      let text = (self#set_sigfigs (string_of_float price) 2) ^ " (" ^ percentage_str ^ " %)" in
+      let font = Printf.sprintf "-*-fixed-medium-r-semicondensed--%d-*-*-*-*-*-iso8859-1" 14 in
+      set_font font;
+      let size_x, size_y = text_size text in
+
+      (*justification*)
+      moveto (x1 + width-size_x) (y + (0*size_y));
+
+      draw_string text;
+
+    done;
+
+
+    (*vertical times*)
+    for i = 0 to 4 do
+
+      let text = ref "" in
+
+      if i = 0 then
+        text := "Now"
+      else (
+        
+      )
+
+    done;
+    
+
+  method get_currently_up stock_name = 
+
+    let low_bound = self#get_bound false in
+    let high_bound = self#get_bound true in
+
+    let old_timestamp_option = List.nth timestamp_list low_bound in
+    let new_timestamp_option = List.nth timestamp_list high_bound in
+
+    let old_timestamp = match old_timestamp_option with
+    | Some x -> x
+    | _ -> "" in
+    let new_timestamp = match new_timestamp_option with
+    | Some x -> x
+    | _ -> "" in
+
+    let price_old_option = self#get_data stock_name old_timestamp in
+    let old_price = match price_old_option with
+      | Some x -> x
+      | None -> 0.0
+    in
+    let price_new_option = self#get_data stock_name new_timestamp in
+    let new_price = match price_new_option with
+      | Some x -> x
+      | None -> 0.0
+    in
+
+  
+    if Float.compare new_price old_price >= 0 then
+      true
+    else
+      false;
+
+
+  method set_segment_color =
+
+    if (self#get_currently_up current_stock) then
+      set_color (rgb 0 255 0)
+    else
+      set_color (rgb 255 0 0)
+
 
   method draw =
     set_color (rgb 50 50 50);
     fill_rect x1 y1 width height;
 
-  
+    self#draw_lines;
+    self#draw_data;
 
 end
 
+
+class change_graph_timeframe x y width height r g b text graph_obj inc = object (self)
+  inherit button x y width height r g b text as super
+
+  val clock_obj = graph_obj
+  val increase = inc
+
+  method! execute =
+    if self#check_press then (
+
+      let current_timeline = graph_obj#get_timeline in
+
+      if inc then (
+
+        let new_timeline = match current_timeline with
+        | 5 -> 15 (*5 mins*)
+        | 15 -> 60 (*15 mins*)
+        | 60 -> 180 (*1 hour*)
+        | 180 -> 1440 (*3 hours*)
+        | 1440 -> 10080 (*1 day*)
+        | 10080 -> 43200 (*1 week*)
+        | 43200 -> 525600 (*1 month*)
+        | 525600 -> 2628000 (*1 year*)
+        | 2628000 -> 2628000 (*5 years (all time)*)
+        | _ -> 0 in
+
+        graph_obj#set_timeline new_timeline;
+
+      ) else (
+
+        let new_timeline = match current_timeline with
+        | 5 -> 5 (*15 mins*)
+        | 15 -> 5 (*15 mins*)
+        | 60 -> 15 (*1 hour*)
+        | 180 -> 60 (*3 hours*)
+        | 1440 -> 180 (*1 day*)
+        | 10080 -> 1440 (*1 week*)
+        | 43200 -> 10080 (*1 month*)
+        | 525600 -> 43200 (*1 year*)
+        | 2628000 -> 525600 (*5 years (all time)*)
+        | _ -> 0 in
+
+        graph_obj#set_timeline new_timeline;
+
+      );
+
+      super#execute;
+      
+    );
+
+end
 
 class stock_value_viewer nname x y = object
 
@@ -683,17 +1178,29 @@ class stock_value_viewer nname x y = object
   val y1 = y
   val width = 100
   val height = 40
+  val color_barrier_width = 2
+
 
   val mutable value = 0.0;
+  val mutable currently_up = true;
 
   method get_stock_name : string = stock_name
 
   method set_current_value v = 
     value <- v;
 
+  method set_currently_up b = 
+    currently_up <- b;
+
   method draw =
-    set_color (rgb 200 200 200);
+    if currently_up then
+      set_color (rgb 0 255 0)
+    else
+      set_color (rgb 255 0 0);
     fill_rect x1 y1 width height;
+
+    set_color (rgb 200 200 200);
+    fill_rect (x1+color_barrier_width) (y1+color_barrier_width) (width - (color_barrier_width*2)) (height-(color_barrier_width*2));
 
     (*value text*)
     let text = string_of_float value in 
@@ -705,6 +1212,27 @@ class stock_value_viewer nname x y = object
     moveto (((width - size_x) / 2) + x1) (((height - size_y) / 2) + y1);
     draw_string text;
 
+end
 
+
+class change_graph_stock x y width height r g b text graph_obj stock_name = object (self)
+  inherit button x y width height r g b text as super
+
+  val! mutable text_color = white
+  val! mutable justification = "right"
+  val graph_obj = graph_obj
+  val stock_name = stock_name
+
+  method! get_hover_color_shift = 
+    0
+
+  method! execute =
+    if self#check_press then (
+
+      graph_obj#set_current_stock stock_name;
+
+      super#execute;
+      
+    );
 
 end
